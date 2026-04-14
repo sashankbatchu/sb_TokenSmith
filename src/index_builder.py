@@ -34,6 +34,93 @@ DEFAULT_EXCLUSION_KEYWORDS = ['questions', 'exercises', 'summary', 'references']
 
 # ------------------------ Main index builder -----------------------------
 
+def parse_chapter_num(raw_chapter: object) -> int:
+    """
+    Normalize chapter values into an integer chapter number.
+    Returns 0 when parsing fails.
+    """
+    if raw_chapter is None:
+        return 0
+    if isinstance(raw_chapter, int):
+        return raw_chapter
+
+    chapter_text = str(raw_chapter).strip()
+    if not chapter_text:
+        return 0
+
+    direct_match = re.search(r"\d+", chapter_text)
+    if direct_match:
+        try:
+            return int(direct_match.group())
+        except ValueError:
+            return 0
+    return 0
+
+
+def classify_chunk_type(text: str, section_heading: str) -> str:
+    """
+    Assign a chunk type label using lightweight heading/content heuristics.
+    """
+    body = text.lower()
+    heading = (section_heading or "").lower()
+    combined = f"{heading}\n{body}"
+
+    if (
+        "definition:" in combined
+        or " is defined as " in combined
+        or " refers to " in combined
+        or heading.startswith("definition")
+    ):
+        return "definition"
+
+    if (
+        "example" in heading
+        or re.search(r"\bexample\b", combined)
+        or "for instance" in combined
+        or "for example" in combined
+        or "consider " in combined
+    ):
+        return "example"
+
+    if (
+        ("|" in text and re.search(r"\|.*\|", text))
+        or "table" in heading
+        or re.search(r"\btable\b", combined)
+    ):
+        return "table"
+
+    if (
+        "theorem" in heading
+        or re.search(r"\btheorem\b", combined)
+        or "lemma" in heading
+        or re.search(r"\blemma\b", combined)
+        or "proposition" in heading
+        or re.search(r"\bproposition\b", combined)
+    ):
+        return "theorem"
+
+    if (
+        "exercise" in heading
+        or re.search(r"\bexercise\b", combined)
+        or "question" in heading
+        or re.search(r"\bproblem\b", combined)
+    ):
+        return "exercise"
+
+    if (
+        "```" in text
+        or re.search(r"\bdef\s+\w+\(", text)
+        or re.search(r"\bclass\s+\w+", text)
+        or re.search(r"\bfor\s+\w+\s+in\b", text)
+        or re.search(r"\bif\s+.+:\s*$", text, flags=re.MULTILINE)
+    ):
+        return "code"
+
+    if body.strip():
+        return "narrative"
+    return "unknown"
+
+
 def build_index(
     markdown_file: str,
     *,
@@ -76,7 +163,7 @@ def build_index(
         current_level = c.get('level', 1)
 
         # Determine current chapter number
-        chapter_num = c.get('chapter', 0)
+        chapter_num = parse_chapter_num(c.get('chapter', 0))
 
         # Pop sections that are deeper or siblings
         while heading_stack and heading_stack[-1][0] >= current_level:
@@ -88,8 +175,11 @@ def build_index(
 
         # Construct section path
         path_list = [h[1] for h in heading_stack]
+        chapter_label = f"Chapter {chapter_num}"
         full_section_path = " ".join(path_list)
-        full_section_path = f"Chapter {chapter_num} " + full_section_path
+        full_section_path = f"{chapter_label} " + full_section_path
+        section_hierarchy = [chapter_label] + path_list
+        section_depth = max(0, len(section_hierarchy) - 1)
 
         # Use DocumentChunker to recursively split this section
         sub_chunks = chunker.chunk(c['content'])
@@ -131,6 +221,10 @@ def build_index(
 
             # Clean sub_chunk by removing page markers
             clean_chunk = re.sub(page_pattern, '', sub_chunk).strip()
+            chunk_page_numbers = sorted(list(chunk_pages))
+            page_start = chunk_page_numbers[0] if chunk_page_numbers else None
+            page_end = chunk_page_numbers[-1] if chunk_page_numbers else None
+            chunk_type = classify_chunk_type(clean_chunk, c.get("heading", ""))
             
             # Skip introduction chunks for embedding
             if c["heading"] == "Introduction":
@@ -142,10 +236,16 @@ def build_index(
                 "mode": chunk_config.to_string(),
                 "char_len": len(clean_chunk),
                 "word_len": len(clean_chunk.split()),
+                "chapter_num": chapter_num,
                 "section": c['heading'],
                 "section_path": full_section_path,
+                "section_hierarchy": section_hierarchy,
+                "section_depth": section_depth,
                 "text_preview": clean_chunk[:100],
-                "page_numbers": sorted(list(chunk_pages)),
+                "page_numbers": chunk_page_numbers,
+                "page_start": page_start,
+                "page_end": page_end,
+                "chunk_type": chunk_type,
                 "chunk_id": total_chunks + sub_chunk_id
             }
 

@@ -4,6 +4,7 @@ import faiss  # force single OpenMP init
 import argparse
 import json
 import pathlib
+import re
 import sys
 from typing import Dict, Optional, List, Tuple, Union, Any
 
@@ -29,6 +30,139 @@ from src.retriever import (
 from src.ranking.reranker import rerank
 
 ANSWER_NOT_FOUND = "I'm sorry, but I don't have enough information to answer that question."
+
+
+def detect_query_intent(question: str) -> Dict[str, float]:
+    """
+    Heuristic query intent detection with confidence-like scores in [0, 1].
+    """
+    q = (question or "").strip().lower()
+    starts = q.startswith
+
+    definition_score = 0.0
+    foundational_score = 0.0
+    procedural_score = 0.0
+    comparison_score = 0.0
+
+    if starts("what is") or starts("what are") or starts("define") or "meaning of" in q:
+        definition_score = 0.95
+    elif re.search(r"\bdefinition\b", q):
+        definition_score = 0.7
+
+    if (
+        re.search(r"\bbasics?\b", q)
+        or re.search(r"\bintro(duction)?\b", q)
+        or re.search(r"\bfundamentals?\b", q)
+        or re.search(r"\bbeginner\b", q)
+        or re.search(r"\boverview\b", q)
+    ):
+        foundational_score = 0.9
+
+    if starts("how to") or starts("how do") or starts("how does") or re.search(r"\bsteps?\b", q):
+        procedural_score = 0.9
+    elif re.search(r"\bimplement\b|\bbuild\b|\bset up\b", q):
+        procedural_score = 0.65
+
+    if re.search(r"\bdifference between\b", q) or re.search(r"\bvs\.?\b", q) or "compare" in q:
+        comparison_score = 0.9
+
+    return {
+        "definition_intent": definition_score,
+        "foundational_intent": foundational_score,
+        "procedural_intent": procedural_score,
+        "comparison_intent": comparison_score,
+    }
+
+
+def apply_metadata_aware_scoring(
+    ordered: List[int],
+    retrieval_scores: List[float],
+    meta: List[Dict[str, Any]],
+    intent: Dict[str, float],
+    cfg: RAGConfig,
+) -> Tuple[List[int], List[float]]:
+    """
+    Apply post-retrieval score fusion:
+      score_final = score_retrieval + alpha*typeBoost + beta*depthBoost + gamma*chapterPrior
+    """
+    if not ordered:
+        return ordered, retrieval_scores
+
+    enabled = getattr(cfg, "enable_metadata_scoring", True)
+    if not enabled:
+        return ordered, retrieval_scores
+
+    alpha = float(getattr(cfg, "metadata_type_boost_alpha", 0.20))
+    beta = float(getattr(cfg, "metadata_depth_boost_beta", 0.10))
+    gamma = float(getattr(cfg, "metadata_chapter_boost_gamma", 0.15))
+
+    # Fallback base score when ranker does not provide full scores.
+    base_scores: Dict[int, float] = {}
+    for rank, idx in enumerate(ordered):
+        fallback = 1.0 / (rank + 1)
+        base_scores[idx] = retrieval_scores[rank] if rank < len(retrieval_scores) else fallback
+
+    def _type_boost(chunk_meta: Dict[str, Any]) -> float:
+        chunk_type = chunk_meta.get("chunk_type", "unknown")
+        boost = 0.0
+        if intent["definition_intent"] > 0:
+            if chunk_type == "definition":
+                boost += 1.0 * intent["definition_intent"]
+            elif chunk_type == "theorem":
+                boost += 0.35 * intent["definition_intent"]
+        if intent["procedural_intent"] > 0:
+            if chunk_type == "example":
+                boost += 0.7 * intent["procedural_intent"]
+            elif chunk_type == "code":
+                boost += 0.6 * intent["procedural_intent"]
+        if intent["comparison_intent"] > 0 and chunk_type in {"definition", "theorem"}:
+            boost += 0.4 * intent["comparison_intent"]
+        return boost
+
+    def _depth_boost(chunk_meta: Dict[str, Any]) -> float:
+        depth = chunk_meta.get("section_depth", 2)
+        try:
+            depth = int(depth)
+        except (TypeError, ValueError):
+            depth = 2
+
+        # Prefer moderate structure depth for explanatory responses.
+        if depth in {1, 2}:
+            return 1.0
+        if depth == 0:
+            return 0.65
+        if depth == 3:
+            return 0.75
+        return 0.45
+
+    def _chapter_prior(chunk_meta: Dict[str, Any]) -> float:
+        # Prioritize earlier chapters for foundational queries.
+        if intent["foundational_intent"] <= 0:
+            return 0.0
+        chapter_num = chunk_meta.get("chapter_num", 0)
+        try:
+            chapter_num = int(chapter_num)
+        except (TypeError, ValueError):
+            chapter_num = 0
+        if chapter_num <= 0:
+            return 0.0
+        return (1.0 / chapter_num) * intent["foundational_intent"]
+
+    rescored: List[Tuple[int, float]] = []
+    for idx in ordered:
+        chunk_meta = meta[idx] if idx < len(meta) else {}
+        final_score = (
+            base_scores.get(idx, 0.0)
+            + alpha * _type_boost(chunk_meta)
+            + beta * _depth_boost(chunk_meta)
+            + gamma * _chapter_prior(chunk_meta)
+        )
+        rescored.append((idx, final_score))
+
+    rescored.sort(key=lambda x: x[1], reverse=True)
+    final_ordered = [idx for idx, _ in rescored]
+    final_scores = [score for _, score in rescored]
+    return final_ordered, final_scores
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Welcome to TokenSmith!")
@@ -114,6 +248,7 @@ def get_answer(
     sources = artifacts["sources"]
     retrievers = artifacts["retrievers"]
     ranker = artifacts["ranker"]
+    meta = artifacts.get("meta", [])
     # Ensure these locals exist for all control flows to avoid UnboundLocalError
     ranked_chunks: List[str] = []
     topk_idxs: List[int] = []
@@ -132,6 +267,9 @@ def get_answer(
         ranked_chunks, topk_idxs = use_indexed_chunks(question, chunks)
     else:
         retrieval_query = question
+        query_intent = detect_query_intent(question)
+        if additional_log_info is not None:
+            additional_log_info["query_intent"] = query_intent
         # print(f"Retrieval query: {retrieval_query}")
         if cfg.use_hyde:
             retrieval_query = generate_hypothetical_document(question, cfg.gen_model, max_tokens=cfg.hyde_max_tokens)
@@ -148,6 +286,13 @@ def get_answer(
         #     print(f"  {retriever_name}: {list(score_dict.values())}")
         # Step 2: Ranking
         ordered, scores = ranker.rank(raw_scores=raw_scores)
+        ordered, scores = apply_metadata_aware_scoring(
+            ordered=ordered,
+            retrieval_scores=scores,
+            meta=meta,
+            intent=query_intent,
+            cfg=cfg,
+        )
         # print(f"Ordered candidate indices after ranking: {ordered[:cfg.top_k]}")
         # print(f"Corresponding scores: {scores[:cfg.top_k]}")
         topk_idxs = filter_retrieved_chunks(cfg, chunks, ordered)
