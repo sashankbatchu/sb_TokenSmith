@@ -181,8 +181,16 @@ def build_index(
         section_hierarchy = [chapter_label] + path_list
         section_depth = max(0, len(section_hierarchy) - 1)
 
-        # Use DocumentChunker to recursively split this section
-        sub_chunks = chunker.chunk(c['content'])
+        # Use DocumentChunker with hierarchical context to split this section.
+        sub_chunks = chunker.chunk(
+            c["content"],
+            context={
+                "section_level": current_level,
+                "section_depth": section_depth,
+                "section_heading": c.get("heading", ""),
+                "chapter_num": chapter_num,
+            },
+        )
 
         # Regex to find page markers like "--- Page 3 ---"
         page_pattern = re.compile(r'--- Page (\d+) ---')

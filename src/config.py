@@ -7,7 +7,14 @@ from typing import Dict
 import yaml
 import pathlib
 
-from src.preprocessing.chunking import ChunkStrategy, SectionRecursiveStrategy, SectionRecursiveConfig, ChunkConfig
+from src.preprocessing.chunking import (
+    ChunkStrategy,
+    SectionRecursiveStrategy,
+    SectionRecursiveConfig,
+    SemanticBoundaryStrategy,
+    SemanticBoundaryConfig,
+    ChunkConfig
+)
 
 @dataclass
 class RAGConfig:
@@ -16,6 +23,8 @@ class RAGConfig:
     chunk_mode: str = "recursive_sections"
     chunk_size: int = 2000
     chunk_overlap: int = 200
+    semantic_similarity_drop_threshold: float = 0.18
+    semantic_min_paragraph_chars: int = 80
 
     # retrieval + ranking
     top_k: int = 10
@@ -84,12 +93,24 @@ class RAGConfig:
                 recursive_chunk_size=self.chunk_size,
                 recursive_overlap=self.chunk_overlap
             )
+        elif self.chunk_mode == "semantic_sections":
+            return SemanticBoundaryConfig(
+                chunk_size=self.chunk_size,
+                chunk_overlap=self.chunk_overlap,
+                similarity_drop_threshold=self.semantic_similarity_drop_threshold,
+                min_paragraph_chars=self.semantic_min_paragraph_chars
+            )
         else:
-            raise ValueError(f"Unknown chunk_mode: {self.chunk_mode}. Supported: recursive_sections")
+            raise ValueError(
+                f"Unknown chunk_mode: {self.chunk_mode}. "
+                "Supported: recursive_sections, semantic_sections"
+            )
 
     def get_chunk_strategy(self) -> ChunkStrategy:
         if isinstance(self.chunk_config, SectionRecursiveConfig):
             return SectionRecursiveStrategy(self.chunk_config)
+        if isinstance(self.chunk_config, SemanticBoundaryConfig):
+            return SemanticBoundaryStrategy(self.chunk_config)
         raise ValueError(f"Unknown chunk config type: {self.chunk_config.__class__.__name__}")
 
     def get_artifacts_directory(self) -> os.PathLike:
