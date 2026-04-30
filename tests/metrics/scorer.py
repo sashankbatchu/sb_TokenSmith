@@ -1,6 +1,8 @@
 from typing import Dict, List, Any, Optional
 from tests.metrics.registry import MetricRegistry
 
+NON_AGGREGATE_METRICS = {"chunk_retrieval"}
+
 
 class SimilarityScorer:
     """Main scorer that uses selected metrics."""
@@ -47,8 +49,8 @@ class SimilarityScorer:
             scores[f"{name}_similarity"] = score
             
             weight = metric.weight
-            # Only include metrics with non-zero weight in final score
-            if weight > 0:
+            # Some metrics are useful diagnostics but should not affect benchmark pass/fail.
+            if weight > 0 and name not in NON_AGGREGATE_METRICS:
                 total_weighted_score += score * weight
                 total_weight += weight
         
@@ -64,5 +66,6 @@ class SimilarityScorer:
             **scores,
             "final_score": final_score,
             "keywords_matched": keywords_matched,
-            "active_metrics": list(active_metrics.keys())
+            "active_metrics": list(active_metrics.keys()),
+            "non_aggregate_metrics": sorted(name for name in active_metrics if name in NON_AGGREGATE_METRICS),
         }

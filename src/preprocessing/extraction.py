@@ -3,9 +3,6 @@ import re
 import json
 from typing import List, Dict
 import sys
-from docling.datamodel.pipeline_options import PdfPipelineOptions
-from docling.document_converter import DocumentConverter, PdfFormatOption, InputFormat
-from docling.backend.docling_parse_v2_backend import DoclingParseV2DocumentBackend
 
 def extract_sections_from_markdown(
     file_path: str,
@@ -178,6 +175,10 @@ def convert_and_save_with_page_numbers(input_file_path, output_file_path):
         output_file_path (str): The path to the destination .md file.
     """
     
+    from docling.datamodel.pipeline_options import PdfPipelineOptions
+    from docling.document_converter import DocumentConverter, PdfFormatOption, InputFormat
+    from docling.backend.docling_parse_v2_backend import DoclingParseV2DocumentBackend
+
     source = Path(input_file_path)
     if not source.exists():
         print(f"Error: Input file not found at {input_file_path}", file=sys.stderr)
@@ -230,17 +231,23 @@ def preprocess_extracted_section(text: str) -> str:
     Returns:
         str: The cleaned text.
     """
-    # Replaces all newline and image tag occurences with single spaces
-    text = text.replace('\n', ' ')
+    text = text.replace('\r\n', '\n')
+    text = text.replace('\r', '\n')
     text = text.replace('<!-- image -->', ' ')
-
-    # Removes bold formatting markers (**)
     text = text.replace('**', '')
 
-    # Normalizes all whitespace to single spaces
-    cleaned_text = ' '.join(text.split())
+    cleaned_paragraphs = []
+    for block in re.split(r"\n\s*\n+", text):
+        stripped = block.strip()
+        if not stripped:
+            continue
 
-    return cleaned_text
+        normalized_lines = [' '.join(line.split()) for line in stripped.split('\n') if line.strip()]
+        paragraph = '\n'.join(normalized_lines) if any(line.lstrip().startswith('#') for line in normalized_lines) else ' '.join(normalized_lines)
+        if paragraph.strip():
+            cleaned_paragraphs.append(paragraph.strip())
+
+    return '\n\n'.join(cleaned_paragraphs)
 
 
 def main():

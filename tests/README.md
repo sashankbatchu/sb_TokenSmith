@@ -192,6 +192,44 @@ Generates:
 
 ## Usage Examples
 
+### Three-Baseline Comparison
+
+Run the benchmark suite across the three ablation baselines:
+
+```bash
+python3 tests/compare_baselines.py --config config/config.yaml
+```
+
+Run only benchmarks that explicitly define an `intent` field:
+
+```bash
+python3 tests/compare_baselines.py --config config/config.yaml --only-with-intent
+```
+
+Run only specific intents:
+
+```bash
+python3 tests/compare_baselines.py --config config/config.yaml --intent-values definition,comparison
+```
+
+This produces a timestamped folder under `tests/results/baseline_compare/` with:
+- `baseline_comparison_results.json`: raw per-benchmark results for all baselines
+- `baseline_summary.csv`: overall summary metrics per baseline
+- `baseline_per_benchmark.csv`: one row per benchmark/baseline
+- `baseline_comparison_report.md`: write-up-friendly summary
+- `baseline_comparison_report.html`: side-by-side report with simple graphs
+
+The three built-in baselines are:
+- `recursive_sections`
+- `semantic_sections`
+- `semantic_metadata`
+
+The comparison report breaks down results by:
+- `type` from `tests/benchmarks.yaml`
+- `intent` from `tests/benchmarks.yaml` when present
+
+If a benchmark does not include an explicit `intent`, the runner derives one from the question using the current query-intent heuristic.
+
 ### Experiment with System Prompts
 
 ```bash

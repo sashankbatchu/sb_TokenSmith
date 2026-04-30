@@ -2,8 +2,16 @@ import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import List, Tuple, Optional, Set, Dict, Any
+import numpy as np
+
+try:
+    from sentence_transformers import SentenceTransformer as HFSentenceTransformer
+except ImportError:  # pragma: no cover - dependency availability is environment-specific
+    HFSentenceTransformer = None
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+_EMBEDDING_MODEL_CACHE: Dict[str, Any] = {}
 
 # -------------------------- Chunking Configs --------------------------
 
@@ -39,6 +47,10 @@ class SemanticBoundaryConfig(ChunkConfig):
     chunk_overlap: int
     similarity_drop_threshold: float = 0.18
     min_paragraph_chars: int = 80
+    embedding_model_name: str = "BAAI/bge-small-en-v1.5"
+    lexical_weight: float = 0.2
+    embedding_weight: float = 0.8
+    adaptive_threshold_percentile: int = 25
 
     def to_string(self) -> str:
         return (
@@ -54,6 +66,7 @@ class SemanticBoundaryConfig(ChunkConfig):
         assert self.chunk_overlap < self.chunk_size, "chunk_overlap must be < chunk_size"
         assert 0.0 <= self.similarity_drop_threshold <= 1.0, "similarity_drop_threshold must be in [0, 1]"
         assert self.min_paragraph_chars >= 0, "min_paragraph_chars must be >= 0"
+        assert 0 <= self.adaptive_threshold_percentile <= 100, "adaptive_threshold_percentile must be in [0, 100]"
 
 # -------------------------- Chunking Strategies --------------------------
 
@@ -127,7 +140,7 @@ class SectionRecursiveStrategy(ChunkStrategy):
         context = context or {}
         section_depth = self._resolve_section_depth(context)
         size_multiplier = self._depth_size_multiplier(section_depth)
-        eff_chunk_size = max(200, int(self.recursive_chunk_size * size_multiplier))
+        eff_chunk_size = max(1, int(self.recursive_chunk_size * size_multiplier))
         eff_chunk_overlap = min(
             max(0, int(self.recursive_overlap * size_multiplier)),
             max(0, eff_chunk_size - 1),
@@ -148,6 +161,16 @@ class SemanticBoundaryStrategy(ChunkStrategy):
     """
 
     WORD_RE = re.compile(r"[A-Za-z0-9_'-]+")
+    SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9#])")
+    HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+")
+    PAGE_MARKER_RE = re.compile(r"^\s*---\s*Page\s+\d+\s*---\s*$", re.IGNORECASE)
+    ANCHOR_ROLE_PATTERNS = {
+        "definition": re.compile(r"^\s*Definition\b", re.IGNORECASE),
+        "example": re.compile(r"^\s*Example\b", re.IGNORECASE),
+        "theorem": re.compile(r"^\s*(Theorem|Lemma|Proposition|Corollary)\b", re.IGNORECASE),
+        "proof": re.compile(r"^\s*Proof\b", re.IGNORECASE),
+        "remark": re.compile(r"^\s*Remark\b", re.IGNORECASE),
+    }
 
     def __init__(self, config: SemanticBoundaryConfig):
         self.config = config
@@ -160,6 +183,24 @@ class SemanticBoundaryStrategy(ChunkStrategy):
             chunk_overlap=self.chunk_overlap,
             separators=["\n\n", "\n", ". ", " ", ""]
         )
+        self.embedding_model_name = config.embedding_model_name
+        self.lexical_weight = config.lexical_weight
+        self.embedding_weight = config.embedding_weight
+        self.adaptive_threshold_percentile = config.adaptive_threshold_percentile
+        self.embedding_model = self._get_embedding_model(self.embedding_model_name)
+        if self.embedding_model is None:
+            # Fall back to lexical similarity only if the embedding backend is unavailable.
+            self.lexical_weight = 1.0
+            self.embedding_weight = 0.0
+        self._embedding_cache = {}
+
+    @staticmethod
+    def _get_embedding_model(model_name: str):
+        if HFSentenceTransformer is None:
+            return None
+        if model_name not in _EMBEDDING_MODEL_CACHE:
+            _EMBEDDING_MODEL_CACHE[model_name] = HFSentenceTransformer(model_name)
+        return _EMBEDDING_MODEL_CACHE[model_name]
 
     def name(self) -> str:
         return (
@@ -171,47 +212,237 @@ class SemanticBoundaryStrategy(ChunkStrategy):
     def artifact_folder_name(self) -> str:
         return "semantic_sections"
 
+    def _sentence_blockify(self, text: str) -> List[str]:
+        text = text.strip()
+        if not text:
+            return []
+
+        sentences = [s.strip() for s in self.SENTENCE_SPLIT_RE.split(text) if s.strip()]
+        if len(sentences) <= 1:
+            return [text]
+
+        blocks: List[str] = []
+        current = sentences[0]
+        for sentence in sentences[1:]:
+            if (
+                len(current) >= self.min_paragraph_chars
+                or self.HEADING_RE.match(sentence)
+                or self._paragraph_role(sentence) != "body"
+            ):
+                blocks.append(current.strip())
+                current = sentence
+            else:
+                current = f"{current} {sentence}".strip()
+
+        if current.strip():
+            blocks.append(current.strip())
+        return blocks
+
     def _split_paragraphs(self, text: str) -> List[str]:
-        paragraphs = [p.strip() for p in re.split(r"\n\s*\n+", text) if p.strip()]
-        if paragraphs:
-            return paragraphs
-        return [text.strip()] if text.strip() else []
+        if not text or not text.strip():
+            return []
+
+        raw_blocks = [p.strip() for p in re.split(r"\n\s*\n+", text) if p.strip()]
+        paragraphs: List[str] = []
+        for block in raw_blocks:
+            if self.PAGE_MARKER_RE.match(block):
+                continue
+            if "\n" not in block and len(block) > self.chunk_size:
+                paragraphs.extend(self._sentence_blockify(block))
+            else:
+                paragraphs.append(block)
+
+        if not paragraphs and text.strip():
+            return self._sentence_blockify(text.strip())
+        return paragraphs
 
     def _token_set(self, text: str) -> Set[str]:
         return set(self.WORD_RE.findall(text.lower()))
 
-    def _similarity(self, a: str, b: str) -> float:
+    def _cosine_similarity(self, a: str, b: str) -> float:
+        if self.embedding_model is None or not a.strip() or not b.strip():
+            return 0.0
+
+        if a not in self._embedding_cache:
+            self._embedding_cache[a] = self.embedding_model.encode(
+                a,
+                normalize_embeddings=True
+            )
+
+        if b not in self._embedding_cache:
+            self._embedding_cache[b] = self.embedding_model.encode(
+                b,
+                normalize_embeddings=True
+            )
+
+        return float(np.dot(self._embedding_cache[a], self._embedding_cache[b]))
+
+
+    def _jaccard_similarity(self, a: str, b: str) -> float:
         a_toks = self._token_set(a)
         b_toks = self._token_set(b)
+
         if not a_toks or not b_toks:
             return 0.0
+
         inter = len(a_toks & b_toks)
         union = len(a_toks | b_toks)
-        if union == 0:
-            return 0.0
-        return inter / union
+
+        return inter / union if union else 0.0
+
+
+    def _similarity(self, a: str, b: str) -> float:
+        lexical_sim = self._jaccard_similarity(a, b)
+        embedding_sim = self._cosine_similarity(a, b)
+
+        return (
+            self.lexical_weight * lexical_sim
+            + self.embedding_weight * embedding_sim
+        )
+
+    @classmethod
+    def _paragraph_role(cls, paragraph: str) -> str:
+        if not paragraph or not paragraph.strip():
+            return "empty"
+        if cls.HEADING_RE.match(paragraph):
+            return "heading"
+        for role, pattern in cls.ANCHOR_ROLE_PATTERNS.items():
+            if pattern.match(paragraph):
+                return role
+        return "body"
+
+    @staticmethod
+    def _is_companion_role(previous_role: str, current_role: str) -> bool:
+        if current_role in {"proof", "remark"} and previous_role in {"theorem", "definition", "example"}:
+            return True
+        if current_role == "example" and previous_role in {"definition", "body", "heading"}:
+            return True
+        return False
+
+    @staticmethod
+    def _tail_excerpt(text: str, size: int = 500) -> str:
+        return text[-size:] if len(text) > size else text
+
+    def _compute_adaptive_threshold(self, paragraphs: List[str]) -> float:
+        """
+        Computes an adaptive split threshold based on the section's own similarity distribution.
+        Lower percentile = only split on stronger topic shifts.
+        """
+        if len(paragraphs) < 3:
+            return self.similarity_drop_threshold
+
+        sims = []
+        for i in range(1, len(paragraphs)):
+            prev_para = paragraphs[i - 1]
+            curr_para = paragraphs[i]
+
+            curr_role = self._paragraph_role(curr_para)
+            if curr_role == "heading":
+                continue
+
+            sims.append(self._similarity(prev_para, curr_para))
+
+        if not sims:
+            return self.similarity_drop_threshold
+
+        adaptive = float(np.percentile(sims, self.adaptive_threshold_percentile))
+        lower_bound = min(0.12, self.similarity_drop_threshold)
+        upper_bound = max(lower_bound, self.similarity_drop_threshold)
+        adaptive = max(lower_bound, min(upper_bound, adaptive))
+
+        return adaptive
 
     def _build_semantic_units(self, paragraphs: List[str]) -> List[str]:
         if not paragraphs:
             return []
+
+        threshold = self._compute_adaptive_threshold(paragraphs)
+
         units: List[str] = []
         current = paragraphs[0]
-        prev_sim = 1.0
+        current_role = self._paragraph_role(current)
 
-        for para in paragraphs[1:]:
-            sim = self._similarity(current[-500:], para[:500])
+        for i in range(1, len(paragraphs)):
+            para = paragraphs[i]
+            para_role = self._paragraph_role(para)
             current_is_substantial = len(current) >= self.min_paragraph_chars
-            # Create a boundary when coherence drops significantly.
-            if current_is_substantial and sim < self.similarity_drop_threshold and sim < (prev_sim * 0.7):
+            sim = self._similarity(self._tail_excerpt(current), para)
+
+            should_split = False
+
+            if para_role == "heading" and current.strip():
+                should_split = True
+            elif self._is_companion_role(current_role, para_role):
+                should_split = False
+            elif para_role in {"definition", "theorem"} and current.strip():
+                should_split = True
+            elif para_role == "example" and current_is_substantial and len(current) >= int(self.chunk_size * 0.45):
+                should_split = True
+            elif current_is_substantial and sim < threshold:
+                should_split = True
+
+            if should_split:
                 units.append(current.strip())
                 current = para
+                current_role = para_role
             else:
                 current = f"{current}\n\n{para}"
-            prev_sim = sim
+                current_role = para_role if para_role != "body" else current_role
 
         if current.strip():
             units.append(current.strip())
+
         return units
+
+    def _paragraph_overlap(self, previous_chunk: str, overlap_chars: int) -> str:
+        """
+        Uses whole paragraphs for overlap instead of slicing raw characters.
+        Avoids starting chunks mid-word or mid-sentence.
+        """
+        if overlap_chars <= 0:
+            return ""
+
+        paras = self._split_paragraphs(previous_chunk)
+        selected = []
+        total = 0
+
+        for para in reversed(paras):
+            selected.insert(0, para)
+            total += len(para)
+
+            if total >= overlap_chars:
+                break
+
+        return "\n\n".join(selected).strip()
+
+    def _pack_units(
+        self,
+        units: List[str],
+        eff_chunk_size: int,
+        eff_chunk_overlap: int
+    ) -> List[str]:
+        chunks: List[str] = []
+
+        for unit in units:
+            if not unit.strip():
+                continue
+
+            if len(unit) > eff_chunk_size:
+                adaptive_splitter = RecursiveCharacterTextSplitter(
+                    chunk_size=eff_chunk_size,
+                    chunk_overlap=eff_chunk_overlap,
+                    separators=["\n\n", "\n", ". ", " ", ""]
+                )
+                chunks.extend(adaptive_splitter.split_text(unit))
+                continue
+
+            if eff_chunk_overlap > 0 and chunks:
+                overlap = self._paragraph_overlap(chunks[-1], eff_chunk_overlap)
+                chunks.append(f"{overlap}\n\n{unit}".strip() if overlap else unit)
+            else:
+                chunks.append(unit.strip())
+
+        return chunks
 
     @staticmethod
     def _resolve_section_depth(context: Dict[str, Any]) -> int:
@@ -239,57 +470,33 @@ class SemanticBoundaryStrategy(ChunkStrategy):
             return 0.9
         return 0.75
 
-    def _pack_units(self, units: List[str], eff_chunk_size: int, eff_chunk_overlap: int) -> List[str]:
-        chunks: List[str] = []
-        current = ""
-
-        for unit in units:
-            if not unit.strip():
-                continue
-
-            candidate = unit if not current else f"{current}\n\n{unit}"
-            if len(candidate) <= eff_chunk_size:
-                current = candidate
-                continue
-
-            if current.strip():
-                chunks.append(current.strip())
-
-            if len(unit) > eff_chunk_size:
-                adaptive_splitter = RecursiveCharacterTextSplitter(
-                    chunk_size=eff_chunk_size,
-                    chunk_overlap=eff_chunk_overlap,
-                    separators=["\n\n", "\n", ". ", " ", ""]
-                )
-                chunks.extend(adaptive_splitter.split_text(unit))
-                current = ""
-                continue
-
-            if eff_chunk_overlap > 0 and chunks:
-                tail = chunks[-1][-eff_chunk_overlap:]
-                current = f"{tail}\n\n{unit}".strip()
-            else:
-                current = unit
-
-        if current.strip():
-            chunks.append(current.strip())
-        return chunks
-
-    def chunk(self, text: str, context: Optional[Dict[str, Any]] = None) -> List[str]:
+    def chunk(
+        self,
+        text: str,
+        context: Optional[Dict[str, Any]] = None
+    ) -> List[str]:
         context = context or {}
-        section_depth = self._resolve_section_depth(context)
-        size_multiplier = self._depth_size_multiplier(section_depth)
-        eff_chunk_size = max(200, int(self.chunk_size * size_multiplier))
+
+        if "section_depth" in context or "section_level" in context:
+            section_depth = self._resolve_section_depth(context)
+            size_multiplier = self._depth_size_multiplier(section_depth)
+        else:
+            size_multiplier = 1.0
+
+        eff_chunk_size = max(1, int(self.chunk_size * size_multiplier))
         eff_chunk_overlap = min(
             max(0, int(self.chunk_overlap * size_multiplier)),
             max(0, eff_chunk_size - 1),
         )
 
         paragraphs = self._split_paragraphs(text)
+
         if not paragraphs:
             return []
+
         units = self._build_semantic_units(paragraphs)
         chunks = self._pack_units(units, eff_chunk_size, eff_chunk_overlap)
+
         if not chunks:
             fallback_splitter = RecursiveCharacterTextSplitter(
                 chunk_size=eff_chunk_size,
@@ -297,6 +504,7 @@ class SemanticBoundaryStrategy(ChunkStrategy):
                 separators=["\n\n", "\n", ". ", " ", ""]
             )
             return fallback_splitter.split_text(text)
+
         return chunks
 
 # ----------------------------- Document Chunker ---------------------------------

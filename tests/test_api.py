@@ -92,22 +92,26 @@ rrf_k: 50
         """chunk_config is created during initialization."""
         from src.config import RAGConfig
         from src.preprocessing.chunking import SectionRecursiveConfig
+        from src.preprocessing.chunking import SemanticBoundaryConfig
         
-        cfg = RAGConfig(chunk_mode="recursive_sections", chunk_size=1000, chunk_overlap=100)
-        
-        assert isinstance(cfg.chunk_config, SectionRecursiveConfig)
-        assert cfg.chunk_config.recursive_chunk_size == 1000
-        assert cfg.chunk_config.recursive_overlap == 100
+        # cfg = RAGConfig(chunk_mode="recursive_sections", chunk_size=1000, chunk_overlap=100)
+        cfg = RAGConfig(chunk_mode="semantic_sections", chunk_size=1000, chunk_overlap=100)
+        assert isinstance(cfg.chunk_config, SemanticBoundaryConfig)
+        # assert isinstance(cfg.chunk_config, SectionRecursiveConfig)
+        # assert cfg.chunk_config.recursive_chunk_size == 1000
+        # assert cfg.chunk_config.recursive_overlap == 100
     
     def test_get_chunk_strategy(self):
         """get_chunk_strategy returns correct strategy."""
         from src.config import RAGConfig
         from src.preprocessing.chunking import SectionRecursiveStrategy
+        from src.preprocessing.chunking import SemanticBoundaryStrategy
         
         cfg = RAGConfig()
         strategy = cfg.get_chunk_strategy()
         
-        assert isinstance(strategy, SectionRecursiveStrategy)
+        assert isinstance(strategy, SemanticBoundaryStrategy)
+        # assert isinstance(strategy, SectionRecursiveStrategy)
 
 
 # ====================== EnsembleRanker Tests ======================
@@ -486,6 +490,58 @@ class TestChunkingAPI:
         with pytest.raises(ValueError, match="No chunk strategy"):
             chunker.chunk("some text")
 
+    def test_preprocess_extracted_section_preserves_paragraphs(self):
+        """Section preprocessing should keep paragraph boundaries for semantic chunking."""
+        from src.preprocessing.extraction import preprocess_extracted_section
+
+        raw = "First paragraph line one.\nFirst paragraph line two.\n\nSecond paragraph.\n<!-- image -->\n\n**Third** paragraph."
+        cleaned = preprocess_extracted_section(raw)
+
+        parts = cleaned.split("\n\n")
+        assert len(parts) == 3
+        assert parts[0] == "First paragraph line one. First paragraph line two."
+        assert parts[1] == "Second paragraph."
+        assert parts[2] == "Third paragraph."
+
+    def test_semantic_boundary_keeps_proof_with_theorem(self):
+        """Theorem and proof blocks should stay together while splitting from prior context."""
+        from src.preprocessing.chunking import SemanticBoundaryStrategy, SemanticBoundaryConfig
+
+        config = SemanticBoundaryConfig(chunk_size=220, chunk_overlap=0, min_paragraph_chars=40)
+        strategy = SemanticBoundaryStrategy(config)
+        strategy._similarity = lambda a, b: 0.05
+
+        text = (
+            "Introductory discussion of graph traversal and why correctness matters.\n\n"
+            "Theorem. Breadth-first search visits each reachable node in nondecreasing distance order.\n\n"
+            "Proof. Each frontier expansion processes all nodes at distance d before any node at distance d plus one.\n\n"
+            "A separate implementation note about adjacency list storage and cache locality."
+        )
+        chunks = strategy.chunk(text)
+
+        assert len(chunks) >= 2
+        assert any("Theorem." in chunk and "Proof." in chunk for chunk in chunks)
+        assert all(not ("Proof." in chunk and "Theorem." not in chunk) for chunk in chunks)
+
+    def test_semantic_boundary_recovers_structure_from_flat_text(self):
+        """A flattened section should still be recoverable into multiple semantic blocks."""
+        from src.preprocessing.chunking import SemanticBoundaryStrategy, SemanticBoundaryConfig
+
+        config = SemanticBoundaryConfig(chunk_size=140, chunk_overlap=0, min_paragraph_chars=45)
+        strategy = SemanticBoundaryStrategy(config)
+        strategy._similarity = lambda a, b: 0.05
+
+        flat_text = (
+            "Binary trees store hierarchical relationships. They are useful for recursive algorithms. "
+            "Definition. A binary search tree maintains keys in sorted order by subtree. "
+            "Example. Searching follows a single root to leaf path. "
+            "Balanced trees keep operations efficient in practice."
+        )
+        chunks = strategy.chunk(flat_text)
+
+        assert len(chunks) >= 2
+        assert any("Definition." in chunk for chunk in chunks)
+
 
 # ====================== Reranker Tests ======================
 
@@ -522,6 +578,28 @@ class TestRerankerAPI:
         
         assert isinstance(result, list)
         mock_model.predict.assert_called_once()
+
+
+class TestBenchmarkScoring:
+    """Tests for benchmark score aggregation behavior."""
+
+    def test_chunk_retrieval_excluded_from_final_score(self):
+        """chunk_retrieval remains diagnostic and does not affect final_score."""
+        from tests.metrics.scorer import SimilarityScorer
+
+        scorer = SimilarityScorer(enabled_metrics=["keyword", "chunk_retrieval"])
+        scores = scorer.calculate_scores(
+            answer="Binary search trees keep keys ordered.",
+            expected="Binary search trees are ordered binary trees.",
+            keywords=["binary", "ordered"],
+            ideal_retrieved_chunks=[10, 11, 12],
+            actual_retrieved_chunks=[{"chunk_id": 10}, {"chunk_id": 99}],
+        )
+
+        assert scores["keyword_similarity"] == 1.0
+        assert scores["chunk_retrieval_similarity"] == 1
+        assert scores["final_score"] == 1.0
+        assert "chunk_retrieval" in scores["non_aggregate_metrics"]
 
 
 # ====================== Query Enhancement Tests ======================
@@ -665,6 +743,190 @@ class TestFilterRetrievedChunks:
         assert len(result) == 3
         assert result == [4, 2, 0]
 
+    def test_filter_diversifies_duplicate_sections(self):
+        """filter_retrieved_chunks avoids overloading top_k with one section."""
+        from src.retriever import filter_retrieved_chunks
+        from src.config import RAGConfig
+
+        cfg = RAGConfig(top_k=3, max_chunks_per_section=1)
+        chunks = ["c0", "c1", "c2", "c3"]
+        ordered = [0, 1, 2, 3]
+        meta = [
+            {"section_path": "Chapter 1 Trees"},
+            {"section_path": "Chapter 1 Trees"},
+            {"section_path": "Chapter 1 Graphs"},
+            {"section_path": "Chapter 1 Hashing"},
+        ]
+
+        result = filter_retrieved_chunks(cfg, chunks, ordered, meta=meta)
+
+        assert result == [0, 2, 3]
+
+
+class TestMetadataAwareScoring:
+    """Tests for metadata-aware reranking."""
+
+    @staticmethod
+    def _rerank(question, meta, retrieval_scores=None, cfg_kwargs=None):
+        from src.main import apply_metadata_aware_scoring, detect_query_intent
+        from src.config import RAGConfig
+
+        cfg = RAGConfig(**(cfg_kwargs or {}))
+        ordered = list(range(len(meta)))
+        retrieval_scores = retrieval_scores or [1.0 / (i + 1) for i in range(len(meta))]
+        ordered_after, scores_after = apply_metadata_aware_scoring(
+            ordered=ordered,
+            retrieval_scores=retrieval_scores,
+            meta=meta,
+            intent=detect_query_intent(question),
+            query=question,
+            cfg=cfg,
+        )
+        return ordered_after, scores_after
+
+    def test_heading_overlap_and_chunk_type_boost_definition(self):
+        """Definition queries should prefer matching definition chunks."""
+        meta = [
+            {
+                "chunk_type": "narrative",
+                "section": "Binary Trees Overview",
+                "section_path": "Chapter 4 Binary Trees Overview",
+                "section_hierarchy": ["Chapter 4", "Binary Trees Overview"],
+                "section_depth": 1,
+                "chapter_num": 4,
+            },
+            {
+                "chunk_type": "definition",
+                "section": "Binary Search Tree Definition",
+                "section_path": "Chapter 4 Binary Search Tree Definition",
+                "section_hierarchy": ["Chapter 4", "Binary Search Tree Definition"],
+                "section_depth": 2,
+                "chapter_num": 4,
+            },
+        ]
+
+        ordered_after, _ = self._rerank(
+            "What is a binary search tree?",
+            meta,
+            retrieval_scores=[0.51, 0.50],
+        )
+
+        assert ordered_after[0] == 1
+
+    def test_foundational_queries_prefer_earlier_chapters(self):
+        meta = [
+            {
+                "chunk_type": "narrative",
+                "section": "Transactions",
+                "section_path": "Chapter 12 Transactions",
+                "section_hierarchy": ["Chapter 12", "Transactions"],
+                "section_depth": 2,
+                "chapter_num": 12,
+            },
+            {
+                "chunk_type": "narrative",
+                "section": "Introduction to Database Systems",
+                "section_path": "Chapter 1 Introduction to Database Systems",
+                "section_hierarchy": ["Chapter 1", "Introduction to Database Systems"],
+                "section_depth": 1,
+                "chapter_num": 1,
+            },
+        ]
+
+        ordered_after, _ = self._rerank(
+            "What are the basics of database systems?",
+            meta,
+            retrieval_scores=[0.51, 0.50],
+        )
+
+        assert ordered_after[0] == 1
+
+    def test_procedural_queries_prefer_examples_and_code(self):
+        meta = [
+            {
+                "chunk_type": "narrative",
+                "section": "B+ Trees Overview",
+                "section_path": "Chapter 14 B+ Trees Overview",
+                "section_hierarchy": ["Chapter 14", "B+ Trees Overview"],
+                "section_depth": 2,
+                "chapter_num": 14,
+            },
+            {
+                "chunk_type": "example",
+                "section": "Example B+ Tree Insert",
+                "section_path": "Chapter 14 Example B+ Tree Insert",
+                "section_hierarchy": ["Chapter 14", "Example B+ Tree Insert"],
+                "section_depth": 2,
+                "chapter_num": 14,
+            },
+        ]
+
+        ordered_after, _ = self._rerank(
+            "How do I insert a key into a B+ tree step by step?",
+            meta,
+            retrieval_scores=[0.51, 0.50],
+        )
+
+        assert ordered_after[0] == 1
+
+    def test_comparison_queries_prefer_definition_or_theorem_chunks_with_matching_headings(self):
+        meta = [
+            {
+                "chunk_type": "narrative",
+                "section": "Locking Protocols",
+                "section_path": "Chapter 18 Locking Protocols",
+                "section_hierarchy": ["Chapter 18", "Locking Protocols"],
+                "section_depth": 2,
+                "chapter_num": 18,
+            },
+            {
+                "chunk_type": "definition",
+                "section": "Conflict Serializability vs View Serializability",
+                "section_path": "Chapter 17 Conflict Serializability vs View Serializability",
+                "section_hierarchy": ["Chapter 17", "Conflict Serializability vs View Serializability"],
+                "section_depth": 2,
+                "chapter_num": 17,
+            },
+        ]
+
+        ordered_after, _ = self._rerank(
+            "Compare conflict serializability and view serializability.",
+            meta,
+            retrieval_scores=[0.51, 0.50],
+        )
+
+        assert ordered_after[0] == 1
+
+    def test_metadata_does_not_override_clearly_better_retrieval(self):
+        meta = [
+            {
+                "chunk_type": "narrative",
+                "section": "Binary Search Tree Definition",
+                "section_path": "Chapter 4 Binary Search Tree Definition",
+                "section_hierarchy": ["Chapter 4", "Binary Search Tree Definition"],
+                "section_depth": 2,
+                "chapter_num": 4,
+            },
+            {
+                "chunk_type": "definition",
+                "section": "Hash Index Definition",
+                "section_path": "Chapter 14 Hash Index Definition",
+                "section_hierarchy": ["Chapter 14", "Hash Index Definition"],
+                "section_depth": 2,
+                "chapter_num": 14,
+            },
+        ]
+
+        ordered_after, scores_after = self._rerank(
+            "What is a binary search tree?",
+            meta,
+            retrieval_scores=[0.95, 0.20],
+            cfg_kwargs={"metadata_base_score_weight": 0.80},
+        )
+
+        assert ordered_after[0] == 0
+        assert scores_after[0] > scores_after[1]
+
 
 # ====================== Get Page Numbers Tests ======================
 
@@ -736,11 +998,14 @@ class TestEndToEndAPIContracts:
         """Config -> ChunkConfig -> Strategy pipeline works."""
         from src.config import RAGConfig
         from src.preprocessing.chunking import SectionRecursiveStrategy
+        from src.preprocessing.chunking import SemanticBoundaryStrategy
         
-        cfg = RAGConfig(chunk_mode="recursive_sections", chunk_size=500, chunk_overlap=50)
+        # cfg = RAGConfig(chunk_mode="recursive_sections", chunk_size=500, chunk_overlap=50)
+        cfg = RAGConfig(chunk_mode="semantic_sections", chunk_size=500, chunk_overlap=50)
         strategy = cfg.get_chunk_strategy()
         
-        assert isinstance(strategy, SectionRecursiveStrategy)
+        assert isinstance(strategy, SemanticBoundaryStrategy)
+        # assert isinstance(strategy, SectionRecursiveStrategy)
         
         text = "Test content. " * 100
         chunks = strategy.chunk(text)

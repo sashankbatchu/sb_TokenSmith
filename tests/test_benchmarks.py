@@ -189,7 +189,7 @@ def get_tokensmith_answer(question, config, golden_chunks=None):
 
     # Create RAGConfig from our test config
     cfg = RAGConfig(
-        chunk_mode=config.get("chunk_mode", "recursive_sections"),
+        chunk_mode=config.get("chunk_mode", "semantic_sections"),
         top_k=config.get("top_k", 10),
         embed_model=config.get("embed_model"),
         ensemble_method=config.get("retrieval_method", "rrf"),
@@ -207,7 +207,8 @@ def get_tokensmith_answer(question, config, golden_chunks=None):
         hyde_max_tokens=config.get("hyde_max_tokens", 300),
         use_indexed_chunks=config.get("use_indexed_chunks", False),
         extracted_index_path=config.get("extracted_index_path", "data/extracted_index.json"),
-        page_to_chunk_map_path=config.get("page_to_chunk_map_path", "index/sections/textbook_index_page_to_chunk_map.json"),
+        page_to_chunk_map_path=config.get("page_to_chunk_map_path"),
+        enable_metadata_scoring=config.get("enable_metadata_scoring", True),
     )
     
     # Print status
@@ -252,7 +253,7 @@ def get_tokensmith_answer(question, config, golden_chunks=None):
         "sources": sources,
         "retrievers": retrievers,
         "ranker": ranker,
-        "metadata": metadata,
+        "meta": metadata,
     }
 
     result = get_answer(

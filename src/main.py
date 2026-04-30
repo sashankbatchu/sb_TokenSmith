@@ -7,6 +7,7 @@ import pathlib
 import re
 import sys
 from typing import Dict, Optional, List, Tuple, Union, Any
+import numpy as np
 
 from rich.live import Live
 from rich.console import Console
@@ -14,7 +15,7 @@ from rich.markdown import Markdown
 
 from src.config import RAGConfig
 from src.generator import answer, double_answer, dedupe_generated_text
-from src.index_builder import build_index
+from src.index_builder import build_index, preprocess_for_bm25
 from src.instrumentation.logging import get_logger
 from src.ranking.ranker import EnsembleRanker
 from src.preprocessing.chunking import DocumentChunker
@@ -30,6 +31,12 @@ from src.retriever import (
 from src.ranking.reranker import rerank
 
 ANSWER_NOT_FOUND = "I'm sorry, but I don't have enough information to answer that question."
+QUERY_STOPWORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "between", "by", "compare",
+    "define", "difference", "do", "does", "for", "how", "in", "into", "is",
+    "it", "of", "on", "or", "the", "this", "to", "vs", "what", "when",
+    "where", "which", "who", "why", "with"
+}
 
 
 def detect_query_intent(question: str) -> Dict[str, float]:
@@ -74,11 +81,69 @@ def detect_query_intent(question: str) -> Dict[str, float]:
     }
 
 
+def extract_query_keywords(question: str) -> List[str]:
+    tokens = preprocess_for_bm25(question or "")
+    return [token for token in tokens if token not in QUERY_STOPWORDS]
+
+
+def _normalize_scores_by_order(
+    ordered: List[int],
+    retrieval_scores: List[float],
+) -> Dict[int, float]:
+    if not ordered:
+        return {}
+
+    base_scores: Dict[int, float] = {}
+    fallback_scores = [1.0 / (rank + 1) for rank in range(len(ordered))]
+    raw = [
+        float(retrieval_scores[rank]) if rank < len(retrieval_scores) else fallback_scores[rank]
+        for rank in range(len(ordered))
+    ]
+
+    if max(raw) - min(raw) <= 1e-9:
+        for rank, idx in enumerate(ordered):
+            base_scores[idx] = fallback_scores[rank]
+        return base_scores
+
+    # Use softmax rather than min-max normalization so near-tied retrieval
+    # scores stay near-tied and metadata can meaningfully break the tie.
+    max_score = max(raw)
+    exp_scores = [float(np.exp(score - max_score)) for score in raw]
+    exp_total = sum(exp_scores)
+    if exp_total <= 1e-12:
+        for rank, idx in enumerate(ordered):
+            base_scores[idx] = fallback_scores[rank]
+        return base_scores
+
+    for rank, idx in enumerate(ordered):
+        base_scores[idx] = exp_scores[rank] / exp_total
+    return base_scores
+
+
+def _token_overlap_score(query_tokens: List[str], text: str) -> float:
+    if not query_tokens or not text:
+        return 0.0
+
+    query_set = set(query_tokens)
+    text_set = set(preprocess_for_bm25(text))
+    if not text_set:
+        return 0.0
+
+    matched = len(query_set & text_set)
+    if matched == 0:
+        return 0.0
+
+    precision = matched / len(text_set)
+    recall = matched / len(query_set)
+    return (2.0 * precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+
+
 def apply_metadata_aware_scoring(
     ordered: List[int],
     retrieval_scores: List[float],
     meta: List[Dict[str, Any]],
     intent: Dict[str, float],
+    query: str,
     cfg: RAGConfig,
 ) -> Tuple[List[int], List[float]]:
     """
@@ -95,12 +160,11 @@ def apply_metadata_aware_scoring(
     alpha = float(getattr(cfg, "metadata_type_boost_alpha", 0.20))
     beta = float(getattr(cfg, "metadata_depth_boost_beta", 0.10))
     gamma = float(getattr(cfg, "metadata_chapter_boost_gamma", 0.15))
+    delta = float(getattr(cfg, "metadata_heading_boost_delta", 0.24))
+    base_weight = float(getattr(cfg, "metadata_base_score_weight", 0.65))
 
-    # Fallback base score when ranker does not provide full scores.
-    base_scores: Dict[int, float] = {}
-    for rank, idx in enumerate(ordered):
-        fallback = 1.0 / (rank + 1)
-        base_scores[idx] = retrieval_scores[rank] if rank < len(retrieval_scores) else fallback
+    query_tokens = extract_query_keywords(query)
+    base_scores = _normalize_scores_by_order(ordered, retrieval_scores)
 
     def _type_boost(chunk_meta: Dict[str, Any]) -> float:
         chunk_type = chunk_meta.get("chunk_type", "unknown")
@@ -148,14 +212,37 @@ def apply_metadata_aware_scoring(
             return 0.0
         return (1.0 / chapter_num) * intent["foundational_intent"]
 
+    def _heading_boost(chunk_meta: Dict[str, Any]) -> float:
+        heading = chunk_meta.get("section", "")
+        path = chunk_meta.get("section_path", "")
+        hierarchy = " ".join(chunk_meta.get("section_hierarchy", []) or [])
+        overlap = max(
+            _token_overlap_score(query_tokens, heading),
+            _token_overlap_score(query_tokens, path),
+            _token_overlap_score(query_tokens, hierarchy),
+        )
+
+        # Favor heading/path matches even more for comparison and definition prompts.
+        intent_scale = max(
+            0.40,
+            intent["definition_intent"],
+            intent["comparison_intent"],
+            intent["procedural_intent"] * 0.75,
+        )
+        return overlap * intent_scale
+
     rescored: List[Tuple[int, float]] = []
     for idx in ordered:
         chunk_meta = meta[idx] if idx < len(meta) else {}
-        final_score = (
-            base_scores.get(idx, 0.0)
-            + alpha * _type_boost(chunk_meta)
+        metadata_score = (
+            alpha * _type_boost(chunk_meta)
             + beta * _depth_boost(chunk_meta)
             + gamma * _chapter_prior(chunk_meta)
+            + delta * _heading_boost(chunk_meta)
+        )
+        final_score = (
+            base_weight * base_scores.get(idx, 0.0)
+            + (1.0 - base_weight) * metadata_score
         )
         rescored.append((idx, final_score))
 
@@ -210,15 +297,15 @@ def run_index_mode(args: argparse.Namespace, cfg: RAGConfig):
         use_headings=args.embed_with_headings,
     )
 
-def use_indexed_chunks(question: str, chunks: list) -> list:
+def use_indexed_chunks(question: str, chunks: list, cfg: RAGConfig) -> list:
     # Logic for keyword matching from textbook index
     try:
-        with open('index/sections/textbook_index_page_to_chunk_map.json', 'r') as f:
+        with open(cfg.page_to_chunk_map_path, 'r') as f:
             page_to_chunk_map = json.load(f)
-        with open('data/extracted_index.json', 'r') as f:
+        with open(cfg.extracted_index_path, 'r') as f:
             extracted_index = json.load(f)
     except FileNotFoundError:
-        return []
+        return [], []
 
     keywords = get_keywords(question)
     chunk_ids = {
@@ -228,7 +315,8 @@ def use_indexed_chunks(question: str, chunks: list) -> list:
         for page_no in extracted_index[word]
         for chunk_id in page_to_chunk_map.get(str(page_no), [])
     }
-    return [chunks[cid] for cid in chunk_ids], list(chunk_ids)
+    ordered_chunk_ids = sorted(chunk_ids)
+    return [chunks[cid] for cid in ordered_chunk_ids], ordered_chunk_ids
 
 def get_answer(
     question: str,
@@ -264,13 +352,13 @@ def get_answer(
         # No chunks - baseline mode
         ranked_chunks = []
     elif cfg.use_indexed_chunks:
-        ranked_chunks, topk_idxs = use_indexed_chunks(question, chunks)
+        ranked_chunks, topk_idxs = use_indexed_chunks(question, chunks, cfg)
     else:
         retrieval_query = question
         query_intent = detect_query_intent(question)
         if additional_log_info is not None:
             additional_log_info["query_intent"] = query_intent
-        # print(f"Retrieval query: {retrieval_query}")
+        print(f"Retrieval query: {retrieval_query}")
         if cfg.use_hyde:
             retrieval_query = generate_hypothetical_document(question, cfg.gen_model, max_tokens=cfg.hyde_max_tokens)
         
@@ -286,16 +374,20 @@ def get_answer(
         #     print(f"  {retriever_name}: {list(score_dict.values())}")
         # Step 2: Ranking
         ordered, scores = ranker.rank(raw_scores=raw_scores)
+        
         ordered, scores = apply_metadata_aware_scoring(
             ordered=ordered,
             retrieval_scores=scores,
             meta=meta,
             intent=query_intent,
+            query=question,
             cfg=cfg,
         )
+
+
         # print(f"Ordered candidate indices after ranking: {ordered[:cfg.top_k]}")
         # print(f"Corresponding scores: {scores[:cfg.top_k]}")
-        topk_idxs = filter_retrieved_chunks(cfg, chunks, ordered)
+        topk_idxs = filter_retrieved_chunks(cfg, chunks, ordered, meta=meta)
         ranked_chunks = [chunks[i] for i in topk_idxs]
         # print(f"Top-{cfg.top_k} chunk indices after filtering: {topk_idxs}")
         # print("Len Ranked chunks:", len(ranked_chunks))

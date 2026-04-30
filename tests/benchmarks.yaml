@@ -75,3 +75,404 @@ benchmarks:
     keywords: ["lossy decomposition", "spurious tuples", "lossless join", "superkey", "natural join", "information loss", "functional dependency"]
     similarity_threshold: 0.70
     ideal_retrieved_chunks: [431, 430, 432, 433, 440]
+
+  - id: "primary_vs_secondary_index"
+    type: "factual"
+    question: "What is a primary index, and how does it differ from a secondary index?"
+    expected_answer: "A primary index is built on the ordering key of a sequentially ordered file, while a secondary index is built on a non-ordering attribute and provides an alternate access path."
+    keywords: ["primary index", "secondary index", "ordering key", "sequential file", "non-ordering attribute", "alternate access path", "indexing"]
+    similarity_threshold: 0.72
+    ideal_retrieved_chunks: []
+
+  - id: "bptree_index_file"
+    type: "factual"
+    question: "What is a B+-tree index file?"
+    expected_answer: "A B+-tree index file is a balanced multilevel tree index in which internal nodes guide searches and leaf nodes store search-key values with pointers to records."
+    keywords: ["B+-tree", "balanced tree", "multilevel index", "internal nodes", "leaf nodes", "search-key", "record pointers"]
+    similarity_threshold: 0.72
+    ideal_retrieved_chunks: []
+
+  - id: "hash_index_usage"
+    type: "factual"
+    question: "What is a hash index, and when is it useful?"
+    expected_answer: "A hash index uses a hash function to map search-key values to buckets and is most useful for fast equality lookups."
+    keywords: ["hash index", "hash function", "buckets", "search-key", "equality lookup", "fast retrieval", "hashing"]
+    similarity_threshold: 0.71
+    ideal_retrieved_chunks: []
+
+  - id: "selection_operation"
+    type: "factual"
+    question: "What is the purpose of the selection operation in query processing?"
+    expected_answer: "The selection operation filters tuples from a relation that satisfy a specified predicate."
+    keywords: ["selection operation", "query processing", "filters tuples", "relation", "predicate", "selection", "relational algebra"]
+    similarity_threshold: 0.70
+    ideal_retrieved_chunks: []
+
+  - id: "query_cost_measures"
+    type: "factual"
+    question: "What factors are included in measures of query cost?"
+    expected_answer: "Query cost is typically measured using disk I/O, CPU time, memory usage, and communication overhead when relevant."
+    keywords: ["query cost", "disk I/O", "CPU time", "memory usage", "communication overhead", "cost model", "performance"]
+    similarity_threshold: 0.73
+    ideal_retrieved_chunks: []
+
+  - id: "cardinality_estimation"
+    type: "factual"
+    question: "What is cardinality estimation in query optimization?"
+    expected_answer: "Cardinality estimation is the process of predicting the number of tuples produced by an operation so the optimizer can estimate plan cost."
+    keywords: ["cardinality estimation", "query optimizer", "tuple count", "plan cost", "statistics", "result size", "optimization"]
+    similarity_threshold: 0.74
+    ideal_retrieved_chunks: []
+
+  - id: "materialized_view"
+    type: "factual"
+    question: "What is a materialized view?"
+    expected_answer: "A materialized view is a view whose query result is physically stored and periodically refreshed for faster query processing."
+    keywords: ["materialized view", "stored result", "refresh", "query processing", "view", "precomputed", "performance"]
+    similarity_threshold: 0.71
+    ideal_retrieved_chunks: []
+
+  - id: "acid_properties"
+    type: "factual"
+    question: "What are the ACID properties of a transaction?"
+    expected_answer: "The ACID properties are atomicity, consistency, isolation, and durability."
+    keywords: ["ACID", "atomicity", "consistency", "isolation", "durability", "transactions", "database"]
+    similarity_threshold: 0.69
+    ideal_retrieved_chunks: []
+
+  - id: "serializability"
+    type: "factual"
+    question: "What is serializability in transaction processing?"
+    expected_answer: "Serializability is the property that concurrent transaction execution produces the same result as some serial execution order."
+    keywords: ["serializability", "transaction processing", "concurrent execution", "serial order", "correctness", "schedules", "equivalence"]
+    similarity_threshold: 0.73
+    ideal_retrieved_chunks: []
+
+  - id: "two_phase_locking"
+    type: "factual"
+    question: "What is two-phase locking?"
+    expected_answer: "Two-phase locking is a concurrency-control protocol where a transaction first acquires locks during a growing phase and then releases locks during a shrinking phase."
+    keywords: ["two-phase locking", "2PL", "concurrency control", "growing phase", "shrinking phase", "locks", "transactions"]
+    similarity_threshold: 0.74
+    ideal_retrieved_chunks: []
+
+  - id: "ordered_vs_hash_indices"
+    type: "multi-part"
+    question: "Compare ordered indices and hash indices. What workloads favor each one?"
+    expected_answer: "Ordered indices support equality lookups and range queries, making them suitable for sorted access and interval searches. Hash indices are optimized for equality searches but are poor for range queries."
+    keywords: ["ordered indices", "hash indices", "range queries", "equality search", "sorted access", "interval search", "comparison"]
+    similarity_threshold: 0.76
+    ideal_retrieved_chunks: []
+
+  - id: "bptree_vs_hashing"
+    type: "multi-part"
+    question: "How does a B+-tree support both equality and range queries, and why is this harder for hashing?"
+    expected_answer: "B+-trees maintain keys in sorted order, allowing exact searches and sequential scans across leaf nodes for ranges. Hashing distributes keys by hash value, destroying ordering and making range retrieval inefficient."
+    keywords: ["B+-tree", "range queries", "equality queries", "sorted keys", "leaf scan", "hashing", "ordering"]
+    similarity_threshold: 0.77
+    ideal_retrieved_chunks: []
+
+  - id: "join_algorithm_comparison"
+    type: "multi-part"
+    question: "Compare nested-loop join, merge join, and hash join in terms of cost and use cases."
+    expected_answer: "Nested-loop join is simple and useful for small inputs or indexed joins. Merge join is efficient when inputs are sorted. Hash join is efficient for large unsorted relations with equality join conditions."
+    keywords: ["nested-loop join", "merge join", "hash join", "join cost", "sorted inputs", "indexed join", "comparison"]
+    similarity_threshold: 0.78
+    ideal_retrieved_chunks: []
+
+  - id: "memory_io_join_choice"
+    type: "multi-part"
+    question: "How do memory size and disk I/O affect the choice of a join algorithm?"
+    expected_answer: "More memory allows in-memory hashing or sorting and reduces disk spills. Limited memory increases I/O cost and may favor simpler plans or block nested-loop methods."
+    keywords: ["memory size", "disk I/O", "join algorithm", "hashing", "sorting", "disk spill", "cost"]
+    similarity_threshold: 0.75
+    ideal_retrieved_chunks: []
+
+  - id: "conjunctive_selectivity"
+    type: "multi-part"
+    question: "How does the optimizer estimate result size for conjunctive predicates, and why can this be inaccurate?"
+    expected_answer: "The optimizer often multiplies predicate selectivities assuming independence. This can be inaccurate when predicates are correlated or statistics are stale."
+    keywords: ["conjunctive predicates", "selectivity", "independence assumption", "correlation", "stale statistics", "optimizer", "estimation"]
+    similarity_threshold: 0.77
+    ideal_retrieved_chunks: []
+
+  - id: "relational_transformations"
+    type: "multi-part"
+    question: "Explain how relational algebra transformations can reduce query cost before execution."
+    expected_answer: "Transformations such as pushing selections and projections downward, reordering joins, and eliminating redundant operations reduce intermediate results and lower execution cost."
+    keywords: ["relational algebra", "selection pushdown", "projection pushdown", "join reordering", "query cost", "optimization", "intermediate results"]
+    similarity_threshold: 0.76
+    ideal_retrieved_chunks: []
+
+  - id: "atomicity_vs_durability"
+    type: "multi-part"
+    question: "How do atomicity and durability differ, and what mechanisms help enforce each?"
+    expected_answer: "Atomicity ensures all-or-nothing execution of a transaction, often using logging and rollback. Durability ensures committed results survive failures, often using logs, checkpoints, and stable storage."
+    keywords: ["atomicity", "durability", "rollback", "logging", "checkpoints", "stable storage", "transactions"]
+    similarity_threshold: 0.77
+    ideal_retrieved_chunks: []
+
+  - id: "conflict_vs_view_serializability"
+    type: "multi-part"
+    question: "Compare conflict serializability and view serializability."
+    expected_answer: "Conflict serializability is based on preserving conflicting operation order and is easier to test using precedence graphs. View serializability is broader, based on equivalent reads-from and final writes, but harder to test."
+    keywords: ["conflict serializability", "view serializability", "precedence graph", "reads-from", "final writes", "schedules", "comparison"]
+    similarity_threshold: 0.78
+    ideal_retrieved_chunks: []
+
+  - id: "locks_vs_timestamps"
+    type: "multi-part"
+    question: "Compare lock-based protocols and timestamp-based protocols for concurrency control."
+    expected_answer: "Lock-based protocols use shared and exclusive locks to coordinate access, while timestamp protocols order operations using transaction timestamps without locks."
+    keywords: ["lock-based", "timestamp-based", "concurrency control", "shared lock", "exclusive lock", "timestamps", "protocols"]
+    similarity_threshold: 0.75
+    ideal_retrieved_chunks: []
+
+  - id: "deadlock_detection_prevention"
+    type: "multi-part"
+    question: "How does deadlock detection differ from deadlock prevention?"
+    expected_answer: "Deadlock detection allows deadlocks to occur and then identifies cycles to recover. Deadlock prevention uses rules that ensure circular wait cannot occur."
+    keywords: ["deadlock detection", "deadlock prevention", "cycles", "circular wait", "recovery", "locking", "transactions"]
+    similarity_threshold: 0.74
+    ideal_retrieved_chunks: []
+
+  - id: "chapter_bptree"
+    type: "structure-aware"
+    question: "In which chapter is B+-Tree Index Files discussed?"
+    expected_answer: "Chapter 14, Indexing."
+    keywords: ["chapter 14", "B+-tree", "indexing", "chapter reference", "textbook structure"]
+    similarity_threshold: 0.68
+    ideal_retrieved_chunks: []
+
+  - id: "section_hash_indices"
+    type: "structure-aware"
+    question: "What section explains Hash Indices?"
+    expected_answer: "Section 14.5 Hash Indices."
+    keywords: ["section 14.5", "hash indices", "section reference", "indexing", "textbook structure"]
+    similarity_threshold: 0.68
+    ideal_retrieved_chunks: []
+
+  - id: "chapter_query_cost"
+    type: "structure-aware"
+    question: "Which chapter discusses measures of query cost?"
+    expected_answer: "Chapter 15, Query Processing."
+    keywords: ["chapter 15", "query cost", "query processing", "chapter reference", "cost measures"]
+    similarity_threshold: 0.68
+    ideal_retrieved_chunks: []
+
+  - id: "section_join_operation"
+    type: "structure-aware"
+    question: "Where does the textbook discuss Join Operation algorithms?"
+    expected_answer: "Section 15.5 Join Operation."
+    keywords: ["section 15.5", "join operation", "join algorithms", "section reference", "query processing"]
+    similarity_threshold: 0.69
+    ideal_retrieved_chunks: []
+
+  - id: "section_expression_statistics"
+    type: "structure-aware"
+    question: "What section covers estimating statistics of expression results?"
+    expected_answer: "Section 16.3 Estimating Statistics of Expression Results."
+    keywords: ["section 16.3", "statistics", "expression results", "cardinality estimation", "section reference"]
+    similarity_threshold: 0.70
+    ideal_retrieved_chunks: []
+
+  - id: "section_materialized_views"
+    type: "structure-aware"
+    question: "In which section are materialized views introduced?"
+    expected_answer: "Section 16.5 Materialized Views."
+    keywords: ["section 16.5", "materialized views", "view maintenance", "section reference", "query optimization"]
+    similarity_threshold: 0.68
+    ideal_retrieved_chunks: []
+
+  - id: "section_isolation_levels"
+    type: "structure-aware"
+    question: "What section explains transaction isolation levels?"
+    expected_answer: "Section 17.8 Transaction Isolation Levels."
+    keywords: ["section 17.8", "transaction isolation", "isolation levels", "section reference", "transactions"]
+    similarity_threshold: 0.69
+    ideal_retrieved_chunks: []
+
+  - id: "section_implementation_isolation"
+    type: "structure-aware"
+    question: "Where does the book discuss implementation of isolation levels?"
+    expected_answer: "Section 17.9 Implementation of Isolation Levels."
+    keywords: ["section 17.9", "implementation", "isolation levels", "section reference", "transactions"]
+    similarity_threshold: 0.69
+    ideal_retrieved_chunks: []
+
+  - id: "section_deadlock_handling"
+    type: "structure-aware"
+    question: "Which section introduces deadlock handling?"
+    expected_answer: "Section 18.2 Deadlock Handling."
+    keywords: ["section 18.2", "deadlock handling", "section reference", "concurrency control", "transactions"]
+    similarity_threshold: 0.69
+    ideal_retrieved_chunks: []
+
+  - id: "section_snapshot_isolation"
+    type: "structure-aware"
+    question: "In what section is snapshot isolation discussed?"
+    expected_answer: "Section 18.8 Snapshot Isolation."
+    keywords: ["section 18.8", "snapshot isolation", "MVCC", "section reference", "transactions"]
+    similarity_threshold: 0.70
+    ideal_retrieved_chunks: []
+    
+  - id: "acid_properties"
+    intent: "definition_intent"
+    question: "What are the ACID properties of a transaction?"
+    expected_answer: "The ACID properties are Atomicity, Consistency, Isolation, and Durability. Atomicity ensures a transaction happens entirely or not at all. Consistency ensures transactions preserve database rules and constraints. Isolation ensures concurrent transactions do not interfere in a way that causes anomalies. Durability ensures committed changes survive crashes or power failures."
+    keywords: ["ACID", "atomicity", "consistency", "isolation", "durability", "transaction"]
+    similarity_threshold: 0.72
+    ideal_retrieved_chunks: []
+
+  - id: "lossless_decomposition"
+    intent: "definition_intent"
+    question: "What is a lossless decomposition in database design?"
+    expected_answer: "A lossless decomposition occurs when a relation is decomposed into smaller relations such that the original relation can be exactly reconstructed by joining the decomposed relations. No information is lost and no spurious tuples are introduced. This usually requires that the common attributes form a superkey for at least one decomposed relation."
+    keywords: ["lossless decomposition", "join", "spurious tuples", "superkey", "relation", "reconstruct"]
+    similarity_threshold: 0.70
+    ideal_retrieved_chunks: []
+
+  - id: "serializability"
+    intent: "definition_intent"
+    question: "What is serializability in transaction processing?"
+    expected_answer: "Serializability is the correctness criterion for concurrent schedules where the result of interleaved transaction execution is equivalent to some serial execution of those same transactions. It ensures concurrency does not violate database consistency."
+    keywords: ["serializability", "schedule", "concurrent", "serial execution", "transactions"]
+    similarity_threshold: 0.72
+    ideal_retrieved_chunks: []
+
+  - id: "bplus_tree"
+    intent: "definition_intent"
+    question: "What is a B+ tree index?"
+    expected_answer: "A B+ tree is a balanced tree index structure used in databases for efficient search, insertion, deletion, and range queries. Internal nodes store search keys and pointers, while leaf nodes store data entries or record pointers and are linked sequentially for fast range scans."
+    keywords: ["B+ tree", "index", "balanced tree", "leaf nodes", "range query", "search keys"]
+    similarity_threshold: 0.71
+    ideal_retrieved_chunks: []
+
+  - id: "functional_dependency"
+    intent: "definition_intent"
+    question: "What is a functional dependency?"
+    expected_answer: "A functional dependency X -> Y in a relation means that if two tuples agree on attributes X, they must also agree on attributes Y. Functional dependencies are used in normalization, schema design, and reasoning about keys."
+    keywords: ["functional dependency", "X -> Y", "tuples", "normalization", "keys"]
+    similarity_threshold: 0.70
+    ideal_retrieved_chunks: []
+
+  - id: "why_dbms"
+    intent: "foundational_intent"
+    question: "Why do organizations use a DBMS instead of file systems?"
+    expected_answer: "Organizations use DBMSs instead of file systems to reduce redundancy, improve consistency, enable efficient querying, support concurrent access, enforce security, and provide recovery after failures. DBMSs centralize data management and scale better than isolated file-based systems."
+    keywords: ["DBMS", "file systems", "redundancy", "consistency", "security", "recovery", "querying"]
+    similarity_threshold: 0.74
+    ideal_retrieved_chunks: []
+
+  - id: "why_normalization"
+    intent: "foundational_intent"
+    question: "Why is normalization important in relational databases?"
+    expected_answer: "Normalization is important because it reduces redundancy, avoids update anomalies, improves data integrity, and creates cleaner relational schemas. It decomposes poorly designed relations into well-structured tables based on dependencies."
+    keywords: ["normalization", "redundancy", "update anomalies", "integrity", "schema"]
+    similarity_threshold: 0.72
+    ideal_retrieved_chunks: []
+
+  - id: "why_indexes"
+    intent: "foundational_intent"
+    question: "Why are indexes used in databases?"
+    expected_answer: "Indexes are used to speed up data retrieval by avoiding full table scans. They organize search keys so selections, joins, sorting, and range queries can be processed more efficiently, though they add storage and update overhead."
+    keywords: ["indexes", "speed up", "table scan", "search keys", "range queries", "overhead"]
+    similarity_threshold: 0.72
+    ideal_retrieved_chunks: []
+
+  - id: "why_transactions"
+    intent: "foundational_intent"
+    question: "Why are transactions necessary in database systems?"
+    expected_answer: "Transactions are necessary to ensure reliable execution of grouped database operations. They preserve correctness under failures and concurrent access by providing atomicity, consistency, isolation, and durability."
+    keywords: ["transactions", "ACID", "failures", "concurrent access", "atomicity"]
+    similarity_threshold: 0.73
+    ideal_retrieved_chunks: []
+
+  - id: "why_query_optimizer"
+    intent: "foundational_intent"
+    question: "Why does a DBMS need a query optimizer?"
+    expected_answer: "A DBMS needs a query optimizer because many equivalent execution plans can answer the same SQL query, but with very different costs. The optimizer estimates costs and chooses efficient access paths, join orders, and algorithms."
+    keywords: ["query optimizer", "execution plans", "cost", "join order", "access path"]
+    similarity_threshold: 0.74
+    ideal_retrieved_chunks: []
+
+  - id: "create_index_sql"
+    intent: "procedural_intent"
+    question: "How do you create an index in SQL?"
+    expected_answer: "An index is typically created using the CREATE INDEX statement. For example, CREATE INDEX idx_student_name ON student(name); This builds an index on the name column to improve query performance for searches involving that attribute."
+    keywords: ["create index", "SQL", "CREATE INDEX", "improve query performance"]
+    similarity_threshold: 0.73
+    ideal_retrieved_chunks: []
+
+  - id: "find_candidate_keys"
+    intent: "procedural_intent"
+    question: "How do you find candidate keys from functional dependencies?"
+    expected_answer: "To find candidate keys, compute attribute closures for combinations of attributes using the functional dependencies. A set whose closure contains all attributes is a superkey, and a minimal such set is a candidate key."
+    keywords: ["candidate keys", "attribute closure", "functional dependencies", "superkey", "minimal"]
+    similarity_threshold: 0.74
+    ideal_retrieved_chunks: []
+
+  - id: "convert_to_3nf"
+    intent: "procedural_intent"
+    question: "How do you decompose a schema into 3NF?"
+    expected_answer: "To decompose into 3NF, first compute a minimal cover of the functional dependencies. Then create a relation for each dependency in the cover, ensure a key of the original schema is represented, and remove redundant relations if needed."
+    keywords: ["3NF", "decompose", "minimal cover", "functional dependencies", "key"]
+    similarity_threshold: 0.75
+    ideal_retrieved_chunks: []
+
+  - id: "recover_after_crash"
+    intent: "procedural_intent"
+    question: "How does a DBMS recover after a crash?"
+    expected_answer: "A DBMS recovers after a crash using logs and checkpoints. During restart it analyzes the log, redoes committed transactions whose updates may not be reflected on disk, and undoes incomplete transactions to restore consistency."
+    keywords: ["recover", "crash", "logs", "checkpoints", "redo", "undo"]
+    similarity_threshold: 0.74
+    ideal_retrieved_chunks: []
+
+  - id: "execute_join"
+    intent: "procedural_intent"
+    question: "How is a join operation executed efficiently?"
+    expected_answer: "A join can be executed using algorithms such as nested-loop join, sort-merge join, or hash join. The optimizer chooses among them based on indexes, relation sizes, memory, and estimated cost."
+    keywords: ["join", "nested-loop", "sort-merge", "hash join", "optimizer", "cost"]
+    similarity_threshold: 0.73
+    ideal_retrieved_chunks: []
+
+comparison_intent:
+  - id: "sql_vs_nosql"
+    intent: "comparison_intent"
+    question: "Compare SQL databases and NoSQL databases."
+    expected_answer: "SQL databases typically use relational schemas, structured query language, and strong consistency guarantees, while NoSQL databases often emphasize flexible schemas, horizontal scalability, and specialized data models such as key-value, document, or graph storage."
+    keywords: ["SQL", "NoSQL", "relational", "schema", "scalability", "document", "key-value"]
+    similarity_threshold: 0.75
+    ideal_retrieved_chunks: []
+
+  - id: "clustered_vs_nonclustered"
+    intent: "comparison_intent"
+    question: "What is the difference between clustered and nonclustered indexes?"
+    expected_answer: "A clustered index determines the physical order of table data and usually only one can exist per table. A nonclustered index stores a separate search structure with pointers to rows, allowing multiple indexes on the same table."
+    keywords: ["clustered index", "nonclustered index", "physical order", "pointers"]
+    similarity_threshold: 0.74
+    ideal_retrieved_chunks: []
+
+  - id: "conflict_vs_view_serializable"
+    intent: "comparison_intent"
+    question: "Compare conflict serializability and view serializability."
+    expected_answer: "Conflict serializability is based on swapping nonconflicting operations and is easier to test using precedence graphs. View serializability is more general because it preserves read-from relationships and final writes, but it is harder to test."
+    keywords: ["conflict serializability", "view serializability", "precedence graph", "read-from", "final write"]
+    similarity_threshold: 0.76
+    ideal_retrieved_chunks: []
+
+  - id: "hash_vs_btree"
+    intent: "comparison_intent"
+    question: "Compare hash indexes and B+ tree indexes."
+    expected_answer: "Hash indexes are efficient for equality lookups but poor for range queries. B+ tree indexes support equality searches, ordered scans, and range queries efficiently, making them more versatile for general workloads."
+    keywords: ["hash index", "B+ tree", "equality lookup", "range query", "ordered scans"]
+    similarity_threshold: 0.74
+    ideal_retrieved_chunks: []
+
+  - id: "oltp_vs_olap"
+    intent: "comparison_intent"
+    question: "Compare OLTP and OLAP workloads."
+    expected_answer: "OLTP workloads involve many short concurrent transactions with frequent inserts, updates, and point queries. OLAP workloads focus on complex analytical queries over large historical datasets involving scans, aggregations, and reporting."
+    keywords: ["OLTP", "OLAP", "transactions", "analytics", "aggregations", "historical data"]
+    similarity_threshold: 0.75
+    ideal_retrieved_chunks: []

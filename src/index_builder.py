@@ -64,9 +64,13 @@ def classify_chunk_type(text: str, section_heading: str) -> str:
     body = text.lower()
     heading = (section_heading or "").lower()
     combined = f"{heading}\n{body}"
+    stripped_body = body.strip()
 
     if (
         "definition:" in combined
+        or stripped_body.startswith("definition.")
+        or stripped_body.startswith("definition:")
+        or re.search(r"^\s*definition\b", body, flags=re.IGNORECASE)
         or " is defined as " in combined
         or " refers to " in combined
         or heading.startswith("definition")
@@ -91,6 +95,11 @@ def classify_chunk_type(text: str, section_heading: str) -> str:
 
     if (
         "theorem" in heading
+        or stripped_body.startswith("theorem.")
+        or stripped_body.startswith("lemma.")
+        or stripped_body.startswith("proposition.")
+        or stripped_body.startswith("corollary.")
+        or re.search(r"^\s*(theorem|lemma|proposition|corollary)\b", body, flags=re.IGNORECASE)
         or re.search(r"\btheorem\b", combined)
         or "lemma" in heading
         or re.search(r"\blemma\b", combined)
@@ -247,7 +256,7 @@ def build_index(
                 "chapter_num": chapter_num,
                 "section": c['heading'],
                 "section_path": full_section_path,
-                "section_hierarchy": section_hierarchy,
+               "section_hierarchy": section_hierarchy,
                 "section_depth": section_depth,
                 "text_preview": clean_chunk[:100],
                 "page_numbers": chunk_page_numbers,

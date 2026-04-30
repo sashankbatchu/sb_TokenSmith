@@ -35,7 +35,8 @@ def test_end_to_end_pipeline_stubbed():
         num_candidates=5,
         ensemble_method="linear",
         ranker_weights={"faiss": 0.5, "bm25": 0.5},
-        chunk_mode="recursive_sections",
+        # chunk_mode="recursive_sections",
+        chunk_mode="semantic_sections",
         use_hyde=False,
         disable_chunks=False,
         rerank_mode="none"

@@ -401,6 +401,12 @@ async def chat_stream(request: ChatRequest):
                 source_text = sources[i]
                 pages = page_nums.get(i, [1]) or [1]
 
+                if isinstance(pages, int):
+                    pages = [pages]
+                elif not isinstance(pages, list):
+                    pages = [1]
+
+
                 print(f"[DEBUG] i={i} pages={pages!r} page_nums_has_key={i in page_nums}", flush=True)
 
                 for page in pages:

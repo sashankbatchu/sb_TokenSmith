@@ -73,9 +73,54 @@ def get_page_numbers(chunk_indices: list[int], metadata: list[dict]) -> dict[int
 
 # -------------------------- Filtering logic -----------------------------
 
-def filter_retrieved_chunks(cfg: RAGConfig, chunks, ordered):
-    topk_idxs = ordered[:cfg.top_k]
-    return topk_idxs
+def filter_retrieved_chunks(
+    cfg: RAGConfig,
+    chunks,
+    ordered,
+    meta: Optional[List[Dict[str, Any]]] = None,
+):
+    if not ordered:
+        return []
+
+    if not meta:
+        return ordered[:cfg.top_k]
+
+    max_per_section = int(getattr(cfg, "max_chunks_per_section", 2))
+    diversity_epsilon = float(getattr(cfg, "metadata_diversity_epsilon", 0.10))
+    target = min(cfg.top_k, len(ordered))
+
+    selected: List[int] = []
+    section_counts: Dict[str, int] = {}
+    skipped_for_diversity: List[int] = []
+
+    for rank, idx in enumerate(ordered):
+        if len(selected) >= target:
+            break
+
+        chunk_meta = meta[idx] if 0 <= idx < len(meta) else {}
+        section_key = (
+            chunk_meta.get("section_path")
+            or chunk_meta.get("section")
+            or f"chunk:{idx}"
+        )
+        current_count = section_counts.get(section_key, 0)
+        within_diversity_window = rank < max(target, int(len(ordered) * diversity_epsilon))
+
+        if current_count >= max_per_section and within_diversity_window:
+            skipped_for_diversity.append(idx)
+            continue
+
+        selected.append(idx)
+        section_counts[section_key] = current_count + 1
+
+    if len(selected) < target:
+        for idx in skipped_for_diversity:
+            if len(selected) >= target:
+                break
+            if idx not in selected:
+                selected.append(idx)
+
+    return selected[:target]
 
 # -------------------------- Retrieval core ------------------------------
 
